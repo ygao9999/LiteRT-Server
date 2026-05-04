@@ -142,7 +142,9 @@ class LLMForegroundService : Service() {
     override fun onDestroy() {
         engineInstance = null
         apiServer?.stop()
-        llmEngine?.shutdown()
+        kotlinx.coroutines.runBlocking {
+            llmEngine?.shutdown()
+        }
         scope.cancel()
         super.onDestroy()
     }

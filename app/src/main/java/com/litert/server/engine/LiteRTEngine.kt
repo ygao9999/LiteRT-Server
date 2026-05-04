@@ -11,7 +11,10 @@ import com.google.ai.edge.litertlm.EngineConfig
 import com.google.ai.edge.litertlm.SamplerConfig
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 
 class LiteRTEngine(private val context: Context) {
@@ -28,6 +31,9 @@ class LiteRTEngine(private val context: Context) {
         topP = 0.9,
         temperature = 0.7
     )
+
+    // 保证同一时刻只有一个操作访问 conversation
+    private val conversationMutex = Mutex()
 
     var isReady = false
         private set
@@ -54,13 +60,20 @@ class LiteRTEngine(private val context: Context) {
                 val newEngine = Engine(config)
                 newEngine.initialize()
 
-                currentSamplerConfig = SamplerConfig(topK = topK, topP = topP, temperature = temperature)
+                currentSamplerConfig = SamplerConfig(
+                    topK = topK,
+                    topP = topP,
+                    temperature = temperature
+                )
                 val conv = createNewConversation(newEngine, currentSamplerConfig)
 
-                engine = newEngine
-                conversation = conv
-                currentBackend = if (useGpu) "GPU" else "CPU"
-                isReady = true
+                // initialize 时也要加锁，防止和 clearHistory 竞争
+                conversationMutex.withLock {
+                    engine = newEngine
+                    conversation = conv
+                    currentBackend = if (useGpu) "GPU" else "CPU"
+                    isReady = true
+                }
                 Log.i(TAG, "Engine initialized with $currentBackend backend")
                 true
             } catch (e: Exception) {
@@ -93,38 +106,58 @@ class LiteRTEngine(private val context: Context) {
         )
     }
 
-    suspend fun generateText(prompt: String): Flow<String> {
-        val conv = conversation ?: throw IllegalStateException("Engine not initialized")
-        return conv.sendMessageAsync(prompt).map { it.toString() }
+    /**
+     * 生成文本。
+     * 用 flow + mutex 包裹整个生成过程，保证：
+     * 1. 同一时刻只有一个 sendMessageAsync 在执行
+     * 2. clearHistory 不会在生成中途关闭 conversation
+     */
+    fun generateText(prompt: String): Flow<String> = flow {
+        conversationMutex.withLock {
+            val conv = conversation
+                ?: throw IllegalStateException("Engine not initialized")
+            conv.sendMessageAsync(prompt)
+                .map { it.toString() }
+                .collect { emit(it) }
+        }
+    }
+
+    fun analyzeImage(imagePath: String, prompt: String): Flow<String> = flow {
+        conversationMutex.withLock {
+            val conv = conversation
+                ?: throw IllegalStateException("Engine not initialized")
+            val contents = Contents.of(
+                Content.ImageFile(imagePath),
+                Content.Text(prompt)
+            )
+            conv.sendMessageAsync(contents)
+                .map { it.toString() }
+                .collect { emit(it) }
+        }
     }
 
     /**
-     * Passes the image file + prompt as proper multimodal content.
-     * imagePath must be an absolute file path readable by the engine.
+     * 清除对话历史。
+     * 等待当前生成完成后再重建 conversation，不会截断进行中的输出。
      */
-    suspend fun analyzeImage(imagePath: String, prompt: String): Flow<String> {
-        val conv = conversation ?: throw IllegalStateException("Engine not initialized")
-        val contents = Contents.of(
-            Content.ImageFile(imagePath),
-            Content.Text(prompt)
-        )
-        return conv.sendMessageAsync(contents).map { it.toString() }
-    }
-
-    fun clearHistory() {
-        val eng = engine ?: return
-        conversation?.close()
-        conversation = createNewConversation(eng, currentSamplerConfig)
-        Log.i(TAG, "Conversation history cleared")
+    suspend fun clearHistory() {
+        conversationMutex.withLock {
+            val eng = engine ?: return@withLock
+            conversation?.close()
+            conversation = createNewConversation(eng, currentSamplerConfig)
+            Log.i(TAG, "Conversation history cleared")
+        }
     }
 
     fun getBackend(): String = currentBackend
 
-    fun shutdown() {
-        isReady = false
-        conversation?.close()
-        conversation = null
-        engine?.close()
-        engine = null
+    suspend fun shutdown() {
+        conversationMutex.withLock {
+            isReady = false
+            conversation?.close()
+            conversation = null
+            engine?.close()
+            engine = null
+        }
     }
 }

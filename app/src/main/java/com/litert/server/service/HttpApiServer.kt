@@ -37,6 +37,9 @@ import io.ktor.server.routing.routing
 import kotlinx.coroutines.flow.toList
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
+import android.util.Log
+
+private const val TAG = "HttpApiServer"
 
 class HttpApiServer(
     private val engine: LiteRTEngine,
@@ -47,6 +50,38 @@ class HttpApiServer(
         private set
 
     private val json = Json { ignoreUnknownKeys = true; encodeDefaults = true }
+
+    /**
+     * 将 OpenAI messages 列表转换为 Gemma 4 chat template 格式
+     * system role 合并到第一个 user turn 前面
+     */
+    private fun buildGemmaPrompt(messages: List<OaiMessage>): String {
+        val sb = StringBuilder()
+
+        // 提取 system prompt，合并到首个 user turn
+        val systemPrompt = messages
+            .filter { it.role.lowercase() == "system" }
+            .joinToString("\n") { it.content }
+            .trim()
+
+        val nonSystemMessages = messages.filter { it.role.lowercase() != "system" }
+
+        nonSystemMessages.forEachIndexed { index, msg ->
+            val role = when (msg.role.lowercase()) {
+                "assistant" -> "model"
+                else -> "user"
+            }
+            val content = if (role == "user" && index == 0 && systemPrompt.isNotEmpty()) {
+                "$systemPrompt\n\n${msg.content}"
+            } else {
+                msg.content
+            }
+            sb.append("<start_of_turn>$role\n$content<end_of_turn>\n")
+        }
+
+        sb.append("<start_of_turn>model\n")
+        return sb.toString()
+    }
 
     fun start(): Int {
         for (tryPort in 8080..8082) {
@@ -60,6 +95,7 @@ class HttpApiServer(
                     }
                     install(StatusPages) {
                         exception<Throwable> { call, cause ->
+                            Log.e(TAG, "Unhandled exception in route", cause)
                             call.respond(
                                 HttpStatusCode.InternalServerError,
                                 ErrorResponse(error = cause.message ?: "Unknown error", code = 500)
@@ -103,72 +139,116 @@ class HttpApiServer(
                                     return@post
                                 }
 
-                                val req = call.receive<OaiChatRequest>()
-                                val start = System.currentTimeMillis()
+                                val req = try {
+                                    call.receive<OaiChatRequest>()
+                                } catch (e: Exception) {
+                                    Log.e(TAG, "Failed to parse OaiChatRequest", e)
+                                    call.respond(
+                                        HttpStatusCode.BadRequest,
+                                        ErrorResponse("Invalid request body: ${e.message}", 400)
+                                    )
+                                    return@post
+                                }
 
-                                // Build prompt from message history
-                                val prompt = req.messages.joinToString("\n") {
-                                    "${it.role}: ${it.content}"
-                                } + "\nassistant:"
+                                val start = System.currentTimeMillis()
+                                val prompt = buildGemmaPrompt(req.messages)
+                                Log.d(TAG, "Built prompt (${prompt.length} chars)")
 
                                 if (req.stream) {
                                     val reqId = "chatcmpl-${System.currentTimeMillis()}"
                                     call.respondTextWriter(contentType = ContentType.Text.EventStream) {
-                                        // First chunk carries the role
-                                        val firstChunk = OaiStreamChunk(
-                                            id = reqId,
-                                            created = System.currentTimeMillis() / 1000,
-                                            model = "gemma-4-e2b",
-                                            choices = listOf(
-                                                OaiStreamChoice(
-                                                    index = 0,
-                                                    delta = OaiDelta(role = "assistant", content = "")
-                                                )
-                                            )
-                                        )
-                                        write("data: ${json.encodeToString(firstChunk)}\n\n")
-                                        flush()
-
-                                        engine.generateText(prompt).collect { token ->
-                                            val chunk = OaiStreamChunk(
+                                        try {
+                                            // 首个 chunk 携带 role
+                                            val firstChunk = OaiStreamChunk(
                                                 id = reqId,
                                                 created = System.currentTimeMillis() / 1000,
                                                 model = "gemma-4-e2b",
                                                 choices = listOf(
                                                     OaiStreamChoice(
                                                         index = 0,
-                                                        delta = OaiDelta(content = token)
+                                                        delta = OaiDelta(role = "assistant", content = "")
                                                     )
                                                 )
                                             )
-                                            write("data: ${json.encodeToString(chunk)}\n\n")
+                                            write("data: ${json.encodeToString(firstChunk)}\n\n")
                                             flush()
-                                        }
 
-                                        // Final stop chunk
-                                        val stopChunk = OaiStreamChunk(
-                                            id = reqId,
-                                            created = System.currentTimeMillis() / 1000,
-                                            model = "gemma-4-e2b",
-                                            choices = listOf(
-                                                OaiStreamChoice(
-                                                    index = 0,
-                                                    delta = OaiDelta(),
-                                                    finishReason = "stop"
+                                            // engine 内部 mutex 已保证串行，此处直接 collect
+                                            engine.generateText(prompt).collect { token ->
+                                                val chunk = OaiStreamChunk(
+                                                    id = reqId,
+                                                    created = System.currentTimeMillis() / 1000,
+                                                    model = "gemma-4-e2b",
+                                                    choices = listOf(
+                                                        OaiStreamChoice(
+                                                            index = 0,
+                                                            delta = OaiDelta(content = token)
+                                                        )
+                                                    )
+                                                )
+                                                write("data: ${json.encodeToString(chunk)}\n\n")
+                                                flush()
+                                            }
+
+                                            // 结束 chunk
+                                            val stopChunk = OaiStreamChunk(
+                                                id = reqId,
+                                                created = System.currentTimeMillis() / 1000,
+                                                model = "gemma-4-e2b",
+                                                choices = listOf(
+                                                    OaiStreamChoice(
+                                                        index = 0,
+                                                        delta = OaiDelta(),
+                                                        finishReason = "stop"
+                                                    )
                                                 )
                                             )
-                                        )
-                                        write("data: ${json.encodeToString(stopChunk)}\n\n")
-                                        write("data: [DONE]\n\n")
-                                        flush()
+                                            write("data: ${json.encodeToString(stopChunk)}\n\n")
+                                            write("data: [DONE]\n\n")
+                                            flush()
+
+                                            val ms = System.currentTimeMillis() - start
+                                            Log.d(TAG, "SSE stream completed in ${ms}ms")
+                                            onRequest(
+                                                RequestLogEntry(
+                                                    endpoint = "/v1/chat/completions",
+                                                    responseTimeMs = ms,
+                                                    statusCode = 200
+                                                )
+                                            )
+                                        } catch (e: Exception) {
+                                            // 客户端断开或 engine 异常，静默处理避免崩溃
+                                            Log.e(TAG, "SSE stream error (client may have disconnected)", e)
+                                            try {
+                                                write("data: [DONE]\n\n")
+                                                flush()
+                                            } catch (_: Exception) {
+                                                // 连接已断，忽略
+                                            }
+                                        }
                                     }
-                                    val ms = System.currentTimeMillis() - start
-                                    onRequest(RequestLogEntry(endpoint = "/v1/chat/completions", responseTimeMs = ms, statusCode = 200))
                                 } else {
-                                    val tokens = engine.generateText(prompt).toList()
+                                    val tokens = try {
+                                        engine.generateText(prompt).toList()
+                                    } catch (e: Exception) {
+                                        Log.e(TAG, "generateText failed (non-stream)", e)
+                                        call.respond(
+                                            HttpStatusCode.InternalServerError,
+                                            ErrorResponse("Generation failed: ${e.message}", 500)
+                                        )
+                                        return@post
+                                    }
+
                                     val content = tokens.joinToString("")
                                     val ms = System.currentTimeMillis() - start
-                                    onRequest(RequestLogEntry(endpoint = "/v1/chat/completions", responseTimeMs = ms, statusCode = 200))
+                                    Log.d(TAG, "Non-stream generation completed in ${ms}ms, ${tokens.size} tokens")
+                                    onRequest(
+                                        RequestLogEntry(
+                                            endpoint = "/v1/chat/completions",
+                                            responseTimeMs = ms,
+                                            statusCode = 200
+                                        )
+                                    )
                                     call.respond(
                                         OaiChatResponse(
                                             id = "chatcmpl-${System.currentTimeMillis()}",
@@ -177,7 +257,10 @@ class HttpApiServer(
                                             choices = listOf(
                                                 OaiChoice(
                                                     index = 0,
-                                                    message = OaiMessage(role = "assistant", content = content),
+                                                    message = OaiMessage(
+                                                        role = "assistant",
+                                                        content = content
+                                                    ),
                                                     finishReason = "stop"
                                                 )
                                             )
@@ -187,10 +270,8 @@ class HttpApiServer(
                             }
                         }
 
-                        // ── Legacy routes (kept for backward compat) ─────────
+                        // ── Legacy routes ────────────────────────────────────
                         post("/chat") {
-                            val start = System.currentTimeMillis()
-                            val req = call.receive<ChatRequest>()
                             if (!engine.isReady) {
                                 call.respond(
                                     HttpStatusCode.ServiceUnavailable,
@@ -198,18 +279,45 @@ class HttpApiServer(
                                 )
                                 return@post
                             }
-                            val tokens = engine.generateText(req.message).toList()
+
+                            val start = System.currentTimeMillis()
+                            val req = try {
+                                call.receive<ChatRequest>()
+                            } catch (e: Exception) {
+                                Log.e(TAG, "Failed to parse ChatRequest", e)
+                                call.respond(
+                                    HttpStatusCode.BadRequest,
+                                    ErrorResponse("Invalid request body: ${e.message}", 400)
+                                )
+                                return@post
+                            }
+
+                            val tokens = try {
+                                engine.generateText(req.message).toList()
+                            } catch (e: Exception) {
+                                Log.e(TAG, "generateText failed in /chat", e)
+                                call.respond(
+                                    HttpStatusCode.InternalServerError,
+                                    ErrorResponse("Generation failed: ${e.message}", 500)
+                                )
+                                return@post
+                            }
+
                             val response = tokens.joinToString("")
                             val ms = System.currentTimeMillis() - start
-                            onRequest(RequestLogEntry(endpoint = "/chat", responseTimeMs = ms, statusCode = 200))
+                            onRequest(
+                                RequestLogEntry(
+                                    endpoint = "/chat",
+                                    responseTimeMs = ms,
+                                    statusCode = 200
+                                )
+                            )
                             call.respond(
                                 ChatResponse(response = response, tokens = tokens.size, ms = ms)
                             )
                         }
 
                         post("/vision") {
-                            val start = System.currentTimeMillis()
-                            val req = call.receive<VisionRequest>()
                             if (!engine.isReady) {
                                 call.respond(
                                     HttpStatusCode.ServiceUnavailable,
@@ -217,26 +325,73 @@ class HttpApiServer(
                                 )
                                 return@post
                             }
-                            val tokens = engine.analyzeImage(req.imagePath, req.prompt).toList()
+
+                            val start = System.currentTimeMillis()
+                            val req = try {
+                                call.receive<VisionRequest>()
+                            } catch (e: Exception) {
+                                Log.e(TAG, "Failed to parse VisionRequest", e)
+                                call.respond(
+                                    HttpStatusCode.BadRequest,
+                                    ErrorResponse("Invalid request body: ${e.message}", 400)
+                                )
+                                return@post
+                            }
+
+                            val tokens = try {
+                                engine.analyzeImage(req.imagePath, req.prompt).toList()
+                            } catch (e: Exception) {
+                                Log.e(TAG, "analyzeImage failed in /vision", e)
+                                call.respond(
+                                    HttpStatusCode.InternalServerError,
+                                    ErrorResponse("Vision analysis failed: ${e.message}", 500)
+                                )
+                                return@post
+                            }
+
                             val response = tokens.joinToString("")
                             val ms = System.currentTimeMillis() - start
-                            onRequest(RequestLogEntry(endpoint = "/vision", responseTimeMs = ms, statusCode = 200))
+                            onRequest(
+                                RequestLogEntry(
+                                    endpoint = "/vision",
+                                    responseTimeMs = ms,
+                                    statusCode = 200
+                                )
+                            )
                             call.respond(
                                 ChatResponse(response = response, tokens = tokens.size, ms = ms)
                             )
                         }
 
                         post("/reset") {
-                            engine.clearHistory()
-                            onRequest(RequestLogEntry(endpoint = "/reset", responseTimeMs = 0, statusCode = 200))
+                            try {
+                                // clearHistory 现在是 suspend fun，内部带 mutex，等待生成完成后再重置
+                                engine.clearHistory()
+                            } catch (e: Exception) {
+                                Log.e(TAG, "clearHistory failed", e)
+                                call.respond(
+                                    HttpStatusCode.InternalServerError,
+                                    ErrorResponse("Reset failed: ${e.message}", 500)
+                                )
+                                return@post
+                            }
+                            onRequest(
+                                RequestLogEntry(
+                                    endpoint = "/reset",
+                                    responseTimeMs = 0,
+                                    statusCode = 200
+                                )
+                            )
                             call.respond(mapOf("status" to "conversation cleared"))
                         }
                     }
                 }
                 server!!.start(wait = false)
                 port = tryPort
+                Log.i(TAG, "Server started on port $tryPort")
                 return tryPort
             } catch (e: Exception) {
+                Log.w(TAG, "Failed to bind port $tryPort", e)
                 if (tryPort == 8082) throw e
             }
         }
@@ -246,5 +401,6 @@ class HttpApiServer(
     fun stop() {
         server?.stop(1000, 5000)
         server = null
+        Log.i(TAG, "Server stopped")
     }
 }

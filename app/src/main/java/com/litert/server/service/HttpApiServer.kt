@@ -51,37 +51,7 @@ class HttpApiServer(
 
     private val json = Json { ignoreUnknownKeys = true; encodeDefaults = true }
 
-    /**
-     * 将 OpenAI messages 列表转换为 Gemma 4 chat template 格式
-     * system role 合并到第一个 user turn 前面
-     */
-    private fun buildGemmaPrompt(messages: List<OaiMessage>): String {
-        val sb = StringBuilder()
 
-        // 提取 system prompt，合并到首个 user turn
-        val systemPrompt = messages
-            .filter { it.role.lowercase() == "system" }
-            .joinToString("\n") { it.content }
-            .trim()
-
-        val nonSystemMessages = messages.filter { it.role.lowercase() != "system" }
-
-        nonSystemMessages.forEachIndexed { index, msg ->
-            val role = when (msg.role.lowercase()) {
-                "assistant" -> "model"
-                else -> "user"
-            }
-            val content = if (role == "user" && index == 0 && systemPrompt.isNotEmpty()) {
-                "$systemPrompt\n\n${msg.content}"
-            } else {
-                msg.content
-            }
-            sb.append("<start_of_turn>$role\n$content<end_of_turn>\n")
-        }
-
-        sb.append("<start_of_turn>model\n")
-        return sb.toString()
-    }
 
     fun start(): Int {
         for (tryPort in 8080..8082) {
@@ -151,8 +121,12 @@ class HttpApiServer(
                                 }
 
                                 val start = System.currentTimeMillis()
-                                val prompt = buildGemmaPrompt(req.messages)
-                                Log.d(TAG, "Built prompt (${prompt.length} chars)")
+                                val userMessages = req.messages.filter { it.role == "user" }
+                                if (userMessages.size <= 1) {
+                                    engine.clearHistory()
+                                }
+                                val prompt = userMessages.lastOrNull()?.content ?: ""
+                                Log.d(TAG, "Extracted prompt (${prompt.length} chars)")
 
                                 if (req.stream) {
                                     val reqId = "chatcmpl-${System.currentTimeMillis()}"

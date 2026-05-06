@@ -243,16 +243,40 @@ class HttpApiServer(
 
                                     if (content.contains("<|tool_call>")) {
                                         try {
-                                            val jsonString = content
-                                                .substringAfter("<|tool_call>call:")
-                                                .substringBefore("</")
+                                            val innerText = content
+                                                .substringAfter("<|tool_call>")
+                                                .substringBefore("</") // 兼容 </|tool_call>
+                                                .substringBefore("<tool_call|>") // 兼容用户提到的结束符
                                                 .trim()
-                                                .replace("\"\"}", "\"}")
-                                                .replace("\"\",", "\",")
+
+                                            val functionName = innerText
+                                                .substringAfter("call:")
+                                                .substringBefore("{")
+                                                .trim()
+
+                                            val argsRaw = innerText
+                                                .substringAfter("{")
+                                                .substringBeforeLast("}")
+
+                                            val argsJson = org.json.JSONObject()
+                                            val paramRegex = Regex("""(\w+):<\|"\|>(.*?)<\|"\|>""")
+                                            val matches = paramRegex.findAll(argsRaw)
                                             
-                                            val parsedJson = org.json.JSONObject(jsonString)
-                                            val functionName = parsedJson.getString("name")
-                                            val functionArgs = if (parsedJson.has("parameters")) parsedJson.getJSONObject("parameters").toString() else "{}"
+                                            for (match in matches) {
+                                                val key = match.groupValues[1]
+                                                val value = match.groupValues[2]
+                                                argsJson.put(key, value)
+                                            }
+
+                                            // 如果模型偶尔发神经吐出了纯 JSON，兜底处理一下
+                                            if (argsJson.length() == 0 && argsRaw.contains("\"")) {
+                                                val fallbackJson = org.json.JSONObject("{$argsRaw}")
+                                                fallbackJson.keys().forEach { key ->
+                                                    argsJson.put(key, fallbackJson.getString(key))
+                                                }
+                                            }
+
+                                            val functionArgsString = argsJson.toString()
                                             
                                             finishReason = "tool_calls"
                                             finalContent = null
@@ -262,7 +286,7 @@ class HttpApiServer(
                                                     type = "function",
                                                     function = com.litert.server.data.OaiToolCallFunction(
                                                         name = functionName,
-                                                        arguments = functionArgs
+                                                        arguments = functionArgsString
                                                     )
                                                 )
                                             )

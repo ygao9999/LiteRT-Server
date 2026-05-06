@@ -122,9 +122,26 @@ class HttpApiServer(
 
                                 val start = System.currentTimeMillis()
                                 val userMessages = req.messages.filter { it.role == "user" }
-                                if (userMessages.size <= 1) {
-                                    engine.clearHistory()
+                                
+                                var toolSystemPrompt: String? = null
+                                if (!req.tools.isNullOrEmpty()) {
+                                    val declarations = req.tools.joinToString("") { tool ->
+                                        if (tool.type == "function") {
+                                            val paramsStr = tool.function.parameters?.toString() ?: "{}"
+                                            val desc = tool.function.description?.let { "description: \"$it\", " } ?: ""
+                                            "<|tool>declaration:{\"name\": \"${tool.function.name}\", ${desc}\"parameters\": $paramsStr}</|tool>\n"
+                                        } else ""
+                                    }
+                                    toolSystemPrompt = "You are a helpful AI assistant running locally on an Android device powered by Google's Gemma multimodal LLM via LiteRT. You have access to the following tools:\n$declarations"
                                 }
+
+                                val isNewConversation = userMessages.size <= 1
+                                val toolsChanged = toolSystemPrompt != null && toolSystemPrompt != engine.currentSystemPrompt
+
+                                if (isNewConversation || toolsChanged) {
+                                    engine.clearHistory(toolSystemPrompt)
+                                }
+                                
                                 val prompt = userMessages.lastOrNull()?.content ?: ""
                                 Log.d(TAG, "Extracted prompt (${prompt.length} chars)")
 

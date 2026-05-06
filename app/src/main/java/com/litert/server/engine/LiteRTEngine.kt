@@ -25,6 +25,8 @@ class LiteRTEngine(private val context: Context) {
 
     private var engine: Engine? = null
     private var conversation: com.google.ai.edge.litertlm.Conversation? = null
+    var currentSystemPrompt: String? = null
+        private set
     private var currentBackend: String = "GPU"
     private var currentSamplerConfig: SamplerConfig = SamplerConfig(
         topK = 40,
@@ -65,7 +67,7 @@ class LiteRTEngine(private val context: Context) {
                     topP = topP,
                     temperature = temperature
                 )
-                val conv = createNewConversation(newEngine, currentSamplerConfig)
+                val conv = createNewConversation(newEngine, currentSamplerConfig, currentSystemPrompt)
 
                 // initialize 时也要加锁，防止和 clearHistory 竞争
                 conversationMutex.withLock {
@@ -91,15 +93,18 @@ class LiteRTEngine(private val context: Context) {
 
     private fun createNewConversation(
         eng: Engine,
-        samplerConfig: SamplerConfig
+        samplerConfig: SamplerConfig,
+        systemPrompt: String? = null
     ): com.google.ai.edge.litertlm.Conversation {
+        val instructionText = systemPrompt ?: (
+            "You are a helpful AI assistant running locally on an Android device " +
+            "powered by Google's Gemma multimodal LLM via LiteRT."
+        )
+
         return eng.createConversation(
             ConversationConfig(
                 systemInstruction = Contents.of(
-                    Content.Text(
-                        "You are a helpful AI assistant running locally on an Android device " +
-                        "powered by Google's Gemma multimodal LLM via LiteRT."
-                    )
+                    Content.Text(instructionText)
                 ),
                 samplerConfig = samplerConfig
             )
@@ -138,14 +143,20 @@ class LiteRTEngine(private val context: Context) {
 
     /**
      * 清除对话历史。
+     * 支持传入新的 system prompt，如果传入了，更新它。
      * 等待当前生成完成后再重建 conversation，不会截断进行中的输出。
      */
-    suspend fun clearHistory() {
+    suspend fun clearHistory(newSystemPrompt: String? = null) {
         conversationMutex.withLock {
             val eng = engine ?: return@withLock
+            
+            if (newSystemPrompt != null) {
+                currentSystemPrompt = newSystemPrompt
+            }
+            
             conversation?.close()
-            conversation = createNewConversation(eng, currentSamplerConfig)
-            Log.i(TAG, "Conversation history cleared")
+            conversation = createNewConversation(eng, currentSamplerConfig, currentSystemPrompt)
+            Log.i(TAG, "Conversation history cleared with ${if(currentSystemPrompt != null) "custom" else "default"} system prompt")
         }
     }
 

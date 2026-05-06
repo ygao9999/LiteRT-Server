@@ -11,7 +11,21 @@ data class OaiChatRequest(
     val messages: List<OaiMessage>,
     val stream: Boolean = false,
     @SerialName("max_tokens") val maxTokens: Int? = null,
-    val temperature: Double? = null
+    val temperature: Double? = null,
+    val tools: List<OaiTool>? = null
+)
+
+@Serializable
+data class OaiTool(
+    val type: String,
+    val function: OaiFunction
+)
+
+@Serializable
+data class OaiFunction(
+    val name: String,
+    val description: String? = null,
+    val parameters: kotlinx.serialization.json.JsonObject? = null
 )
 
 @Serializable

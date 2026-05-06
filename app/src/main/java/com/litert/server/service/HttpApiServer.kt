@@ -121,8 +121,6 @@ class HttpApiServer(
                                 }
 
                                 val start = System.currentTimeMillis()
-                                val userMessages = req.messages.filter { it.role == "user" }
-                                
                                 var toolSystemPrompt: String? = null
                                 if (!req.tools.isNullOrEmpty()) {
                                     val declarations = req.tools.joinToString("") { tool ->
@@ -135,15 +133,22 @@ class HttpApiServer(
                                     toolSystemPrompt = "You are a helpful AI assistant running locally on an Android device powered by Google's Gemma multimodal LLM via LiteRT. You have access to the following tools:\n$declarations"
                                 }
 
-                                val isNewConversation = userMessages.size <= 1
-                                val toolsChanged = toolSystemPrompt != null && toolSystemPrompt != engine.currentSystemPrompt
-
-                                if (isNewConversation || toolsChanged) {
-                                    engine.clearHistory(toolSystemPrompt)
-                                }
+                                // 🚨 强行洗脑：不管之前聊过什么，收到新请求一律清空历史
+                                engine.clearHistory(toolSystemPrompt)
                                 
-                                val prompt = userMessages.lastOrNull()?.content ?: ""
-                                Log.d(TAG, "Extracted prompt (${prompt.length} chars)")
+                                // 手动组装 nanobot 传来的所有对话历史
+                                val conversationHistoryText = buildString {
+                                    for (msg in req.messages) {
+                                        if (msg.role == "system") continue 
+                                        val content = msg.content ?: ""
+                                        if (content.isNotEmpty()) {
+                                            append("${msg.role}:\n${content}\n\n")
+                                        }
+                                    }
+                                }
+
+                                val prompt = conversationHistoryText
+                                Log.d(TAG, "Assembled history prompt (${prompt.length} chars)")
 
                                 if (req.stream) {
                                     val reqId = "chatcmpl-${System.currentTimeMillis()}"
@@ -242,6 +247,8 @@ class HttpApiServer(
                                                 .substringAfter("<|tool_call>call:")
                                                 .substringBefore("</")
                                                 .trim()
+                                                .replace("\"\"}", "\"}")
+                                                .replace("\"\",", "\",")
                                             
                                             val parsedJson = org.json.JSONObject(jsonString)
                                             val functionName = parsedJson.getString("name")

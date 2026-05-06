@@ -31,7 +31,21 @@ data class OaiFunction(
 @Serializable
 data class OaiMessage(
     val role: String,
-    val content: String
+    val content: String? = null,
+    @SerialName("tool_calls") val toolCalls: List<OaiToolCall>? = null
+)
+
+@Serializable
+data class OaiToolCall(
+    val id: String,
+    val type: String,
+    val function: OaiToolCallFunction
+)
+
+@Serializable
+data class OaiToolCallFunction(
+    val name: String,
+    val arguments: String
 )
 
 @Serializable

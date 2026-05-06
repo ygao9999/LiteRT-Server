@@ -231,6 +231,39 @@ class HttpApiServer(
                                     }
 
                                     val content = tokens.joinToString("")
+                                    
+                                    var finishReason = "stop"
+                                    var finalContent: String? = content
+                                    var toolCallsList: List<com.litert.server.data.OaiToolCall>? = null
+
+                                    if (content.contains("<|tool_call>")) {
+                                        try {
+                                            val jsonString = content
+                                                .substringAfter("<|tool_call>call:")
+                                                .substringBefore("</")
+                                                .trim()
+                                            
+                                            val parsedJson = org.json.JSONObject(jsonString)
+                                            val functionName = parsedJson.getString("name")
+                                            val functionArgs = if (parsedJson.has("parameters")) parsedJson.getJSONObject("parameters").toString() else "{}"
+                                            
+                                            finishReason = "tool_calls"
+                                            finalContent = null
+                                            toolCallsList = listOf(
+                                                com.litert.server.data.OaiToolCall(
+                                                    id = "call_${System.currentTimeMillis()}",
+                                                    type = "function",
+                                                    function = com.litert.server.data.OaiToolCallFunction(
+                                                        name = functionName,
+                                                        arguments = functionArgs
+                                                    )
+                                                )
+                                            )
+                                        } catch (e: Exception) {
+                                            Log.e(TAG, "Failed to parse tool call from content: $content", e)
+                                        }
+                                    }
+
                                     val ms = System.currentTimeMillis() - start
                                     Log.d(TAG, "Non-stream generation completed in ${ms}ms, ${tokens.size} tokens")
                                     onRequest(
@@ -250,9 +283,10 @@ class HttpApiServer(
                                                     index = 0,
                                                     message = OaiMessage(
                                                         role = "assistant",
-                                                        content = content
+                                                        content = finalContent,
+                                                        toolCalls = toolCallsList
                                                     ),
-                                                    finishReason = "stop"
+                                                    finishReason = finishReason
                                                 )
                                             )
                                         )

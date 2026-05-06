@@ -137,8 +137,12 @@ class HttpApiServer(
                                 engine.clearHistory(toolSystemPrompt)
                                 
                                 // 手动组装 nanobot 传来的所有对话历史
+                                val systemMsgs = req.messages.filter { it.role == "system" }
+                                val nonSystemMsgs = req.messages.filter { it.role != "system" }.takeLast(4)
+                                val truncatedMessages = systemMsgs + nonSystemMsgs
+
                                 val conversationHistoryText = buildString {
-                                    for (msg in req.messages) {
+                                    for (msg in truncatedMessages) {
                                         if (msg.role == "system") continue 
                                         val content = msg.content ?: ""
                                         if (content.isNotEmpty()) {
@@ -276,7 +280,7 @@ class HttpApiServer(
                                                 }
                                             }
 
-                                            val functionArgsString = argsJson.toString()
+                                            val functionArgsString = sanitizeToolCallArgs(argsJson.toString())
                                             
                                             finishReason = "tool_calls"
                                             finalContent = null
@@ -458,5 +462,12 @@ class HttpApiServer(
         server?.stop(1000, 5000)
         server = null
         Log.i(TAG, "Server stopped")
+    }
+
+    private fun sanitizeToolCallArgs(argsJson: String): String {
+        // 修复 key 里带转义引号的问题: "recursive\"" -> "recursive"
+        return argsJson.replace(Regex("""\"(\w+)\\\""\s*:""")) { match ->
+            "\"${match.groupValues[1]}\":"
+        }
     }
 }

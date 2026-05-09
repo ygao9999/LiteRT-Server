@@ -121,7 +121,17 @@ class HttpApiServer(
                                 }
 
                                 val start = System.currentTimeMillis()
-                                var toolSystemPrompt: String? = null
+                                // 提取客户端传来的系统设定
+                                val customSystemMsgs = req.messages
+                                    .filter { it.role == "system" }
+                                    .joinToString("\n") { it.content ?: "" }
+                                    .trim()
+
+                                val baseSystemPrompt = customSystemMsgs.ifEmpty {
+                                    "You are a helpful AI assistant running locally on an Android device powered by Google's Gemma multimodal LLM via LiteRT."
+                                }
+
+                                var finalSystemPrompt = baseSystemPrompt
                                 if (!req.tools.isNullOrEmpty()) {
                                     val declarations = req.tools.joinToString("") { tool ->
                                         if (tool.type == "function") {
@@ -130,19 +140,15 @@ class HttpApiServer(
                                             "<|tool>declaration:{\"name\": \"${tool.function.name}\", ${desc}\"parameters\": $paramsStr}</|tool>\n"
                                         } else ""
                                     }
-                                    toolSystemPrompt = "You are a helpful AI assistant running locally on an Android device powered by Google's Gemma multimodal LLM via LiteRT. You have access to the following tools:\n$declarations"
+                                    finalSystemPrompt = "$baseSystemPrompt\n\nYou have access to the following tools:\n$declarations"
                                 }
 
                                 // 🚨 强行洗脑：不管之前聊过什么，收到新请求一律清空历史
-                                engine.clearHistory(toolSystemPrompt)
+                                engine.clearHistory(finalSystemPrompt)
                                 
-                                // 手动组装 nanobot 传来的所有对话历史
-                                val systemMsgs = req.messages.filter { it.role == "system" }
-                                val nonSystemMsgs = req.messages.filter { it.role != "system" }.takeLast(4)
-                                val truncatedMessages = systemMsgs + nonSystemMsgs
-
+                                // 手动组装 nanobot 传来的所有对话历史 (完全信任客户端，不截断)
                                 val conversationHistoryText = buildString {
-                                    for (msg in truncatedMessages) {
+                                    for (msg in req.messages) {
                                         if (msg.role == "system") continue 
                                         val content = msg.content ?: ""
                                         if (content.isNotEmpty()) {

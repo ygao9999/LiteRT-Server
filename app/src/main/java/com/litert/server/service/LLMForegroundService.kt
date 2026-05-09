@@ -50,7 +50,7 @@ class LLMForegroundService : Service() {
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         val modelPath = intent?.getStringExtra(EXTRA_MODEL_PATH) ?: return START_NOT_STICKY
-        val useGpu = false // Force CPU to bypass 8K context GPU allocation limit
+        val useGpu = intent.getBooleanExtra(EXTRA_USE_GPU, true)
 
         startAsForeground()
 

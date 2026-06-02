@@ -25,9 +25,8 @@ import com.litert.client.ui.theme.AccentGreenBg
 import com.litert.client.ui.theme.PrimaryGreen
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.flow.Flow
-import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import okhttp3.*
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.RequestBody.Companion.toRequestBody
@@ -38,9 +37,10 @@ import org.json.JSONArray
 import org.json.JSONObject
 import java.io.IOException
 import java.util.concurrent.TimeUnit
-
 import com.litert.client.data.AppDatabase
 import com.litert.client.data.MessageEntity
+import com.litert.client.data.DocumentEntity
+import com.litert.client.data.DocumentChunkEntity
 
 // 客户端消息数据模型
 data class ClientMessage(
@@ -63,19 +63,25 @@ fun ChatClientScreen(
     var isSending by remember { mutableStateOf(false) }
 
     // 默认模式与模型配置
-    var chatMode by remember { mutableStateOf("对话") } // "对话" or "知识库"
+    var chatMode by remember { mutableStateOf("知识库") } // 默认开启知识库模式
     var modelName by remember { mutableStateOf("本地 Gemma 4") } // "本地 Gemma 4" or "DS V3.2"
 
-    // 引用底座 Sheet 显隐控制
+    // 引用底座 Sheet 与 知识库管理 Sheet 显隐控制
     var activeCitationSource by remember { mutableStateOf<String?>(null) }
-    var showBottomSheet by remember { mutableStateOf(false) }
+    var showCitationSheet by remember { mutableStateOf(false) }
+    var showKnowledgeSheet by remember { mutableStateOf(false) }
+
+    // 当前在本地库中注册的所有文档列表，以及被勾选挂载的文档 ID 队列
+    val availableDocs = remember { mutableStateListOf<DocumentEntity>() }
+    val selectedDocIds = remember { mutableStateListOf<String>() }
 
     val coroutineScope = rememberCoroutineScope()
     val listState = rememberLazyListState()
 
-    // 🚀 初始化时，自动从 Room 本地数据库恢复历史聊天记录
+    // 🚀 初始化时自动加载历史消息，并智能预装默认文档
     LaunchedEffect(Unit) {
         coroutineScope.launch(Dispatchers.IO) {
+            // 1. 恢复历史对话
             val localMessages = database.messageDao().getAllMessages().map { entity ->
                 ClientMessage(
                     id = entity.id,
@@ -85,9 +91,22 @@ fun ChatClientScreen(
                     citationSource = entity.citationSource
                 )
             }
-            kotlinx.coroutines.withContext(Dispatchers.Main) {
+            
+            // 2. 检查并预装默认文档（开箱即用体验）
+            var docs = database.documentDao().getAllDocuments()
+            if (docs.isEmpty()) {
+                prepopulateDefaultDocument(database)
+                docs = database.documentDao().getAllDocuments()
+            }
+            
+            withContext(Dispatchers.Main) {
                 messages.clear()
                 messages.addAll(localMessages)
+                availableDocs.clear()
+                availableDocs.addAll(docs)
+                // 默认全选所有文档挂载
+                selectedDocIds.clear()
+                selectedDocIds.addAll(docs.map { it.id })
             }
         }
     }
@@ -126,7 +145,7 @@ fun ChatClientScreen(
                         // 🚀 物理清除本地数据库历史记录，并同步清除UI队列
                         coroutineScope.launch(Dispatchers.IO) {
                             database.messageDao().clearHistory()
-                            kotlinx.coroutines.withContext(Dispatchers.Main) {
+                            withContext(Dispatchers.Main) {
                                 messages.clear()
                             }
                         }
@@ -160,7 +179,7 @@ fun ChatClientScreen(
                         message = message,
                         onCitationClick = { source ->
                             activeCitationSource = source
-                            showBottomSheet = true
+                            showCitationSheet = true
                         }
                     )
                 }
@@ -221,6 +240,36 @@ fun ChatClientScreen(
                         shape = RoundedCornerShape(12.dp),
                         border = null
                     )
+
+                    // 🚀 新增：知识库管理胶囊 (ima 风格勾选面板)
+                    if (chatMode == "知识库") {
+                        SuggestionChip(
+                            onClick = {
+                                // 刷新文档库状态并打开抽屉
+                                coroutineScope.launch(Dispatchers.IO) {
+                                    val docs = database.documentDao().getAllDocuments()
+                                    withContext(Dispatchers.Main) {
+                                        availableDocs.clear()
+                                        availableDocs.addAll(docs)
+                                        showKnowledgeSheet = true
+                                    }
+                                }
+                            },
+                            label = {
+                                Text(
+                                    text = "📁 选择文档 (${selectedDocIds.size})",
+                                    fontSize = 12.sp,
+                                    fontWeight = FontWeight.Bold
+                                )
+                            },
+                            colors = SuggestionChipDefaults.suggestionChipColors(
+                                containerColor = AccentGreen.copy(alpha = 0.1f),
+                                labelColor = AccentGreen
+                            ),
+                            shape = RoundedCornerShape(12.dp),
+                            border = null
+                        )
+                    }
                 }
 
                 // 文字输入核心区域
@@ -233,7 +282,9 @@ fun ChatClientScreen(
                         onValueChange = { inputText = it },
                         placeholder = {
                             Text(
-                                text = if (chatMode == "知识库") "基于知识库提问..." else "向大模型发起对话...",
+                                text = if (chatMode == "知识库") {
+                                    if (selectedDocIds.isEmpty()) "⚠️ 请先勾选挂载的文档" else "基于已选文档提问..."
+                                } else "向大模型发起对话...",
                                 fontSize = 14.sp
                             )
                         },
@@ -256,11 +307,11 @@ fun ChatClientScreen(
                             .size(48.dp)
                             .clip(CircleShape)
                             .background(
-                                if (inputText.trim().isEmpty() || isSending)
+                                if (inputText.trim().isEmpty() || isSending || (chatMode == "知识库" && selectedDocIds.isEmpty()))
                                     MaterialTheme.colorScheme.primary.copy(alpha = 0.3f)
                                 else MaterialTheme.colorScheme.primary
                             )
-                            .clickable(enabled = inputText.trim().isNotEmpty() && !isSending) {
+                            .clickable(enabled = inputText.trim().isNotEmpty() && !isSending && !(chatMode == "知识库" && selectedDocIds.isEmpty())) {
                                 val userPrompt = inputText.trim()
                                 inputText = ""
                                 sendPrompt(
@@ -269,6 +320,7 @@ fun ChatClientScreen(
                                     mode = chatMode,
                                     model = modelName,
                                     messagesList = messages,
+                                    selectedDocIds = selectedDocIds.toList(),
                                     database = database,
                                     coroutineScope = coroutineScope,
                                     onStart = { isSending = true },
@@ -289,9 +341,9 @@ fun ChatClientScreen(
         }
 
         // 3. 引用卡片弹出抽屉 Sheet (RAG 引用来源高亮)
-        if (showBottomSheet) {
+        if (showCitationSheet) {
             ModalBottomSheet(
-                onDismissRequest = { showBottomSheet = false },
+                onDismissRequest = { showCitationSheet = false },
                 sheetState = rememberModalBottomSheetState(),
                 containerColor = MaterialTheme.colorScheme.surface
             ) {
@@ -338,6 +390,81 @@ fun ChatClientScreen(
                         fontSize = 13.sp,
                         color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
                     )
+                    Spacer(modifier = Modifier.height(24.dp))
+                }
+            }
+        }
+
+        // 🚀 4. 新增：高仿 ima 知识库挂载/勾选管理抽屉 Sheet (Selectable Knowledge Base)
+        if (showKnowledgeSheet) {
+            ModalBottomSheet(
+                onDismissRequest = { showKnowledgeSheet = false },
+                sheetState = rememberModalBottomSheetState(),
+                containerColor = MaterialTheme.colorScheme.surface
+            ) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(24.dp)
+                        .navigationBarsPadding()
+                ) {
+                    Text(
+                        text = "📚 挂载本地知识库文档",
+                        fontSize = 18.sp,
+                        fontWeight = FontWeight.Bold,
+                        modifier = Modifier.padding(bottom = 16.dp)
+                    )
+                    
+                    if (availableDocs.isEmpty()) {
+                        Text(
+                            text = "暂无本地文档，系统正在重试预装...",
+                            fontSize = 14.sp,
+                            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f)
+                        )
+                    } else {
+                        LazyColumn(
+                            verticalArrangement = Arrangement.spacedBy(8.dp),
+                            modifier = Modifier.fillMaxWidth().heightIn(max = 300.dp)
+                        ) {
+                            items(availableDocs) { doc ->
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .clip(RoundedCornerShape(12.dp))
+                                        .clickable {
+                                            if (selectedDocIds.contains(doc.id)) {
+                                                selectedDocIds.remove(doc.id)
+                                            } else {
+                                                selectedDocIds.add(doc.id)
+                                            }
+                                        }
+                                        .padding(horizontal = 8.dp, vertical = 4.dp)
+                                ) {
+                                    Checkbox(
+                                        checked = selectedDocIds.contains(doc.id),
+                                        onCheckedChange = { checked ->
+                                            if (checked == true) selectedDocIds.add(doc.id)
+                                            else selectedDocIds.remove(doc.id)
+                                        }
+                                    )
+                                    Spacer(modifier = Modifier.width(8.dp))
+                                    Column(modifier = Modifier.weight(1f)) {
+                                        Text(
+                                            text = doc.fileName,
+                                            fontSize = 14.sp,
+                                            fontWeight = FontWeight.SemiBold
+                                        )
+                                        Text(
+                                            text = "字数: ${doc.totalChars}字 | 自动判定: ${if (doc.totalChars < 8000) "🟢 直投模式" else "🔍 RAG检索模式"}",
+                                            fontSize = 11.sp,
+                                            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f)
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
                     Spacer(modifier = Modifier.height(24.dp))
                 }
             }
@@ -452,13 +579,14 @@ fun MessageBubbleRow(
     }
 }
 
-// 核心网络流驱动方法 (SSE 逐字蹦出引擎)
+// 🚀 核心网络流与 RAG 驱动方法（双模智能判定引擎）
 fun sendPrompt(
     serverUrl: String,
     prompt: String,
     mode: String,
     model: String,
     messagesList: MutableList<ClientMessage>,
+    selectedDocIds: List<String>,
     database: AppDatabase,
     coroutineScope: CoroutineScope,
     onStart: () -> Unit,
@@ -466,7 +594,7 @@ fun sendPrompt(
 ) {
     onStart()
     
-    // 🚀 生成并保存用户消息到 Room 数据库
+    // 生成并保存用户消息到本地数据库
     val userMsg = ClientMessage(role = "user", content = prompt)
     messagesList.add(userMsg)
     coroutineScope.launch(Dispatchers.IO) {
@@ -481,9 +609,9 @@ fun sendPrompt(
         )
     }
 
-    // 预添加一个空白的 AI 气泡，用于后续实时填充 Token
+    // 预添加一个空白的 AI 气泡，用于流式动态填充
     val aiMsgId = java.util.UUID.randomUUID().toString()
-    messagesList.add(ClientMessage(id = aiMsgId, role = "assistant", content = "正在思考...", isStreaming = true))
+    messagesList.add(ClientMessage(id = aiMsgId, role = "assistant", content = "正在检索思考...", isStreaming = true))
 
     coroutineScope.launch(Dispatchers.IO) {
         val okHttpClient = OkHttpClient.Builder()
@@ -491,14 +619,57 @@ fun sendPrompt(
             .readTimeout(60, TimeUnit.SECONDS)
             .build()
 
+        var contextString = ""
+        var actualCitationFile: String? = null
+
+        // 🚀 双模核心判定逻辑
+        if (mode == "知识库" && selectedDocIds.isNotEmpty()) {
+            // 读取用户勾选挂载的所有文档
+            val selectedDocs = selectedDocIds.mapNotNull { database.documentDao().getDocumentById(it) }
+            val totalChars = selectedDocs.sumOf { it.totalChars }
+            actualCitationFile = selectedDocs.firstOrNull()?.fileName
+            
+            if (totalChars < 8000) {
+                // 🟢 A模式：小文件直投模式（Direct Injection）
+                contextString = buildString {
+                    append("以下是用户提供的完整背景参考资料：\n\n")
+                    for (doc in selectedDocs) {
+                        append("### 文档名: ${doc.fileName}\n")
+                        append("${doc.fileContent}\n\n")
+                    }
+                }
+                android.util.Log.i("RAGEngine", "自动启动：A模式 - 极速小文件直接投喂 (${totalChars}字)")
+            } else {
+                // 🔍 B模式：大文件切段智能 RAG 检索模式 (SQLite LIKE Keyword matching)
+                // 极简提取提问中的 3 个核心关键词
+                val cleanedPrompt = prompt.replace(Regex("[？！，。：；,.?!]"), " ")
+                val words = cleanedPrompt.split(" ").filter { it.length >= 2 }
+                val k1 = "%${words.getOrNull(0) ?: "收费"}%"
+                val k2 = "%${words.getOrNull(1) ?: "电话"}%"
+                val k3 = "%${words.getOrNull(2) ?: "门诊"}%"
+                
+                // 检索数据库，提取匹配度最高的 3 片段（Top 3 chunks）
+                var matchedChunks = database.documentDao().searchChunks(selectedDocIds, k1, k2, k3)
+                if (matchedChunks.isEmpty()) {
+                    matchedChunks = database.documentDao().fallbackChunks(selectedDocIds)
+                }
+                
+                contextString = buildString {
+                    append("根据用户提问，已在您挂载的本地知识库文档中智能为您筛选出以下最相关的片段资料：\n\n")
+                    for (chunk in matchedChunks) {
+                        append("- ${chunk.content}\n")
+                    }
+                }
+                android.util.Log.i("RAGEngine", "自动启动：B模式 - 大文件切片段落检索投喂，匹配到 ${matchedChunks.size} 个 Chunks")
+            }
+        }
+
         // 构造标准的 OpenAI 格式 JSON 载荷
         val messagesArray = JSONArray()
-        // 自动将当前问题装填进去
         val userMsgJson = JSONObject().apply {
             put("role", "user")
-            put("content", if (mode == "知识库") {
-                // 如果是知识库模式，且包含收费等关键词，自动灌入 Excel 通讯录上下文
-                "这里是汕头大学精神卫生中心最新的科室及部门电话清单：\n\n# 汕头大学精神卫生中心所有科室及部门联系电话清单\n\n| 序号 | 号码 | 短号 | 使用单位 |\n| 17 | 82903117 | 8117 | 门诊收费室 |\n| 18 | 82904579 | 8579 | 门诊收费室 |\n\n请问：$prompt"
+            put("content", if (contextString.isNotEmpty()) {
+                "$contextString\n\n----\n\n基于以上参考资料，请精准回答用户问题：$prompt"
             } else prompt)
         }
         messagesArray.put(userMsgJson)
@@ -506,7 +677,7 @@ fun sendPrompt(
         val requestPayload = JSONObject().apply {
             put("model", "gemma-4-e2b")
             put("messages", messagesArray)
-            put("stream", true) // 强制开启 SSE 流式输出
+            put("stream", true)
         }
 
         val requestBody = requestPayload.toString().toRequestBody("application/json".toMediaType())
@@ -518,7 +689,6 @@ fun sendPrompt(
         var aggregatedResponse = ""
         val sseListener = object : EventSourceListener() {
             override fun onOpen(eventSource: EventSource, response: Response) {
-                // 开启连通，清除“正在思考”占位符
                 updateMessage(messagesList, aiMsgId, "", true, null)
             }
 
@@ -531,12 +701,9 @@ fun sendPrompt(
                 if (data == "[DONE]") {
                     eventSource.cancel()
                     onComplete()
-                    // 推理结束，去除 streaming 状态并根据关键词判定是否注入知识库文献卡片
-                    val isKnowledgeQuery = mode == "知识库" && (prompt.contains("收费") || prompt.contains("门诊"))
-                    val citation = if (isKnowledgeQuery) "汕头大学精神卫生中心业务电话号码表20230925（公开版）.xlsx" else null
-                    updateMessage(messagesList, aiMsgId, aggregatedResponse, false, citation)
+                    updateMessage(messagesList, aiMsgId, aggregatedResponse, false, actualCitationFile)
                     
-                    // 🚀 消息流接收完毕，立刻异步向 Room 数据库写入 AI 的完整回答
+                    // 异步向 Room 数据库持久化保存 AI 的回答
                     coroutineScope.launch(Dispatchers.IO) {
                         database.messageDao().insertMessage(
                             MessageEntity(
@@ -544,7 +711,7 @@ fun sendPrompt(
                                 role = "assistant",
                                 content = aggregatedResponse,
                                 timestamp = System.currentTimeMillis(),
-                                citationSource = citation
+                                citationSource = actualCitationFile
                             )
                         )
                     }
@@ -568,8 +735,6 @@ fun sendPrompt(
             override fun onFailure(eventSource: EventSource, t: Throwable?, response: Response?) {
                 eventSource.cancel()
                 onComplete()
-                
-                // 🚨 关键保护：只有当消息仍处于流式传输状态时，才触发连接异常报错
                 val isStillStreaming = messagesList.firstOrNull { it.id == aiMsgId }?.isStreaming ?: false
                 if (isStillStreaming) {
                     updateMessage(messagesList, aiMsgId, "连接异常，请检查您的网络连接并确认服务端是否正常开启。", false, null)
@@ -582,7 +747,7 @@ fun sendPrompt(
     }
 }
 
-// 线程安全的消息流更新辅助方法
+// 线程安全的消息队列修改辅助方法
 private fun updateMessage(
     list: MutableList<ClientMessage>,
     id: String,
@@ -594,4 +759,79 @@ private fun updateMessage(
     if (index != -1) {
         list[index] = list[index].copy(content = newContent, isStreaming = isStreaming, citationSource = citation)
     }
+}
+
+// 🚀 默认预装开箱文档逻辑：将汕大业务电话号码表自动切片注入本地数据库
+private suspend fun prepopulateDefaultDocument(database: AppDatabase) {
+    val docId = "default_shantou_mental_health_tel"
+    val fileName = "汕头大学精神卫生中心业务电话号码表20230925（公开版）.xlsx"
+    
+    val fullMarkdownContent = """
+# 汕头大学精神卫生中心业务电话号码表 (20230925 公开版)
+
+## 一、 行政管理与职能科室
+- 书记办公室 | 长号: 82904601 | 短号: 8601
+- 院长办公室 | 长号: 82901250 | 短号: 8250
+- 办公室（院办）[含传真] | 长号: 82902704 | 短号: 8704
+- 人事科及档案室 | 长号: 82904574 | 短号: 8574
+- 医保科 | 长号: 82904594 | 短号: 8594
+- 计财科 | 长号: 82904597 / 82903302 | 短号: 8597 / 8302
+- 门诊收费室 | 长号: 82903117 | 短号: 8117
+- 门诊收费室 | 长号: 82904579 | 短号: 8579
+- 信息科 | 长号: 82903512 | 短号: 8512
+
+## 二、 临床科室与住院病区
+- 一 区 | 长号: 82902702 | 短号: 8702
+- 二 区 | 长号: 82902708 | 短号: 8708
+- 三 区 | 长号: 82902705 | 短号: 8705
+- 急三科 | 长号: 88386971 | 短号: 8971
+- 门诊办（病历室） | 长号: 82904576 | 短号: 8525
+- 心理咨询门诊 | 长号: 88900599 | 短号: 8599
+- 睡眠医学中心办 | 长号: 82902709 | 短号: 8709
+
+## 三、 后勤、值班与应急部门
+- 医疗总值班 | 长号: 18025501681 | 短号: 8681
+- 医疗一线值班 | 长号: 18025501682 | 短号: 8682
+- 医疗二线值班 | 长号: 18025501691 | 短号: 8691
+- 护理总值班 | 长号: 18025501683 | 短号: 8683
+- 行政总值班 | 长号: 18025501686 | 短号: 8686
+- 院应急办专线 | 长号: 82902907 | 短号: 8907
+- 司机值班房 | 长号: 82904604 | 短号: 8604
+- 门房值班室 | 长号: 82903510 | 短号: 8510
+- 总务科科长办 | 长号: 82902776 | 短号: 8776
+""".trimIndent()
+
+    val totalChars = fullMarkdownContent.length
+    
+    // 1. 插入文档元数据
+    val doc = DocumentEntity(
+        id = docId,
+        fileName = fileName,
+        totalChars = totalChars,
+        addedTimestamp = System.currentTimeMillis(),
+        fileContent = fullMarkdownContent
+    )
+    database.documentDao().insertDocument(doc)
+    
+    // 2. 将通讯录做 300 字符智能分段切片（Ingestion & Chunking）
+    val chunks = mutableListOf<DocumentChunkEntity>()
+    val chunkSize = 350
+    var index = 0
+    var startIndex = 0
+    while (startIndex < totalChars) {
+        val endIndex = minOf(startIndex + chunkSize, totalChars)
+        val slice = fullMarkdownContent.substring(startIndex, endIndex)
+        chunks.add(
+            DocumentChunkEntity(
+                id = "${docId}_chunk_$index",
+                documentId = docId,
+                chunkIndex = index,
+                content = slice
+            )
+        )
+        index++
+        startIndex += chunkSize
+    }
+    database.documentDao().insertChunks(chunks)
+    android.util.Log.i("RAGEngine", "🎉 默认开箱文档预装完全成功！智能切分成 ${chunks.size} 段落落库。")
 }

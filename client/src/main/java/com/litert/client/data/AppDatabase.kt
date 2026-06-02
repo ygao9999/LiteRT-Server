@@ -5,10 +5,19 @@ import androidx.room.Database
 import androidx.room.Room
 import androidx.room.RoomDatabase
 
-@Database(entities = [MessageEntity::class], version = 1, exportSchema = false)
+@Database(
+    entities = [
+        MessageEntity::class,
+        DocumentEntity::class,
+        DocumentChunkEntity::class
+    ],
+    version = 2,
+    exportSchema = false
+)
 abstract class AppDatabase : RoomDatabase() {
 
     abstract fun messageDao(): MessageDao
+    abstract fun documentDao(): DocumentDao
 
     companion object {
         @Volatile
@@ -20,7 +29,9 @@ abstract class AppDatabase : RoomDatabase() {
                     context.applicationContext,
                     AppDatabase::class.java,
                     "litert_chat_database"
-                ).build()
+                )
+                .fallbackToDestructiveMigration() // 自动平滑升级模式，升级时重建表结构，杜绝闪退
+                .build()
                 INSTANCE = instance
                 instance
             }

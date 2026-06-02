@@ -518,6 +518,19 @@ fun ChatClientScreen(
                                             color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f)
                                         )
                                     }
+                                    Spacer(modifier = Modifier.width(8.dp))
+                                    DocumentDeleteButton(
+                                        onClick = {
+                                            performDeleteDocument(
+                                                context = context,
+                                                database = database,
+                                                doc = doc,
+                                                availableDocs = availableDocs,
+                                                selectedDocIds = selectedDocIds,
+                                                scope = coroutineScope
+                                            )
+                                        }
+                                    )
                                 }
                             }
                         }
@@ -901,4 +914,39 @@ private suspend fun prepopulateDefaultDocument(database: AppDatabase) {
     }
     database.documentDao().insertChunks(chunks)
     android.util.Log.i("RAGEngine", "🎉 默认开箱文档预装完全成功！智能切分成 ${chunks.size} 段落落库。")
+}
+
+@Composable
+fun DocumentDeleteButton(
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    IconButton(
+        onClick = onClick,
+        modifier = modifier
+    ) {
+        Icon(
+            imageVector = Icons.Default.Delete,
+            contentDescription = "删除文档",
+            tint = Color.Red.copy(alpha = 0.7f)
+        )
+    }
+}
+
+private fun performDeleteDocument(
+    context: android.content.Context,
+    database: AppDatabase,
+    doc: DocumentEntity,
+    availableDocs: MutableList<DocumentEntity>,
+    selectedDocIds: MutableList<String>,
+    scope: CoroutineScope
+) {
+    scope.launch(Dispatchers.IO) {
+        database.documentDao().deleteDocument(doc.id)
+        withContext(Dispatchers.Main) {
+            availableDocs.remove(doc)
+            selectedDocIds.remove(doc.id)
+            Toast.makeText(context, "🗑️ 已成功删除文档: ${doc.fileName}", Toast.LENGTH_SHORT).show()
+        }
+    }
 }

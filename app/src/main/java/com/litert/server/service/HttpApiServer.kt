@@ -143,8 +143,9 @@ class HttpApiServer(
                                     finalSystemPrompt = "$baseSystemPrompt\n\nYou have access to the following tools:\n$declarations"
                                 }
 
-                                // 🚨 强行洗脑：不管之前聊过什么，收到新请求一律清空历史
-                                engine.clearHistory(finalSystemPrompt)
+                                 // 🚨 强行洗脑：不管之前聊过什么，收到新请求一律清空历史
+                                 val reqTemp = req.temperature?.toFloat()
+                                 engine.clearHistory(finalSystemPrompt, reqTemp)
                                 
                                 // 手动组装 nanobot 传来的所有对话历史 (完全信任客户端，不截断)
                                 val conversationHistoryText = buildString {

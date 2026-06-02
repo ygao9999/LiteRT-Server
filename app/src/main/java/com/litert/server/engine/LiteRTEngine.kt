@@ -31,7 +31,7 @@ class LiteRTEngine(private val context: Context) {
     private var currentSamplerConfig: SamplerConfig = SamplerConfig(
         topK = 40,
         topP = 0.9,
-        temperature = 0.7
+        temperature = 0.1
     )
 
     // 保证同一时刻只有一个操作访问 conversation
@@ -43,7 +43,7 @@ class LiteRTEngine(private val context: Context) {
     suspend fun initialize(
         modelPath: String,
         useGpu: Boolean = true,
-        temperature: Double = 0.7,
+        temperature: Double = 0.1,
         maxTokens: Int = 1024,
         topK: Int = 40,
         topP: Double = 0.9
@@ -146,7 +146,7 @@ class LiteRTEngine(private val context: Context) {
      * 支持传入新的 system prompt，如果传入了，更新它。
      * 等待当前生成完成后再重建 conversation，不会截断进行中的输出。
      */
-    suspend fun clearHistory(newSystemPrompt: String? = null) {
+    suspend fun clearHistory(newSystemPrompt: String? = null, newTemperature: Float? = null) {
         conversationMutex.withLock {
             val eng = engine ?: return@withLock
             
@@ -154,9 +154,13 @@ class LiteRTEngine(private val context: Context) {
                 currentSystemPrompt = newSystemPrompt
             }
             
+            if (newTemperature != null) {
+                currentSamplerConfig = currentSamplerConfig.copy(temperature = newTemperature)
+            }
+            
             conversation?.close()
             conversation = createNewConversation(eng, currentSamplerConfig, currentSystemPrompt)
-            Log.i(TAG, "Conversation history cleared with ${if(currentSystemPrompt != null) "custom" else "default"} system prompt")
+            Log.i(TAG, "Conversation history cleared with ${if(currentSystemPrompt != null) "custom" else "default"} system prompt, temperature = ${currentSamplerConfig.temperature}")
         }
     }
 

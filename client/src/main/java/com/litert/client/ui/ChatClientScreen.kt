@@ -591,11 +591,17 @@ fun MessageBubbleRow(
                     )
                     .padding(horizontal = 14.dp, vertical = 10.dp)
             ) {
-                Text(
-                    text = message.content,
-                    fontSize = 15.sp,
-                    color = MaterialTheme.colorScheme.onBackground
-                )
+                if (isUser) {
+                    Text(
+                        text = message.content,
+                        fontSize = 15.sp,
+                        color = MaterialTheme.colorScheme.onBackground
+                    )
+                } else {
+                    MarkdownMessageText(
+                        content = message.content
+                    )
+                }
             }
 
             // RAG 引用文献绿色胶囊卡片（ima style 高保真还原）
@@ -705,9 +711,7 @@ fun sendPrompt(
                     append("以下是用户提供的完整背景参考资料：\n\n")
                     for (doc in selectedDocs) {
                         append("### 文档名: ${doc.fileName}\n")
-                        // 🚀 核心转换：将复杂的表格在内存中动态转换为极简列表，防止小模型注意力机制退化产生乱码
-                        append(convertTableToBulletPoints(doc.fileContent))
-                        append("\n\n")
+                        append("${doc.fileContent}\n\n")
                     }
                 }
                 android.util.Log.i("RAGEngine", "自动启动：A模式 - 极速小文件直接投喂 (${totalChars}字)")
@@ -727,11 +731,9 @@ fun sendPrompt(
                 }
                 
                 contextString = buildString {
-                    append("根据用户提问，已在您挂载本地知识库文档中智能为您筛选出以下最相关的片段资料：\n\n")
+                    append("根据用户提问，已在您挂载的本地知识库文档中智能为您筛选出以下最相关的片段资料：\n\n")
                     for (chunk in matchedChunks) {
-                        // 🚀 核心转换：将切片中的表格在内存中转换为对模型最友好的列表文本
-                        append(convertTableToBulletPoints(chunk.content))
-                        append("\n")
+                        append("- ${chunk.content}\n")
                     }
                 }
                 android.util.Log.i("RAGEngine", "自动启动：B模式 - 大文件切片段落检索投喂，匹配到 ${matchedChunks.size} 个 Chunks")
@@ -743,7 +745,7 @@ fun sendPrompt(
         val userMsgJson = JSONObject().apply {
             put("role", "user")
             put("content", if (contextString.isNotEmpty()) {
-                "你是一个极其专业的医院电话号码与科室业务查询助手。请严格基于以下提供的参考资料，用非常简洁、排版工整且适合手机屏幕阅读的加粗列表格式（如：* **科室名**：长号 / 短号）精准回答用户问题。\n\n【重要要求】\n1. 严禁输出任何形式的 Markdown 格式表格（不要使用任何包含 | 符号的表格），请将其全部转化为上述精美的加粗列表格式输出。\n2. 若号码中包含相似数字，请务必极其仔细校对并准确写出，绝对不能多写、少写或写错任何一位数字。\n\n【参考资料】\n$contextString\n\n----\n\n请精准回答用户问题：$prompt"
+                "$contextString\n\n----\n\n基于以上参考资料，请精准回答用户问题：$prompt"
             } else prompt)
         }
         messagesArray.put(userMsgJson)
@@ -752,6 +754,7 @@ fun sendPrompt(
             put("model", "gemma-4-e2b")
             put("messages", messagesArray)
             put("stream", true)
+            put("temperature", 0.1)
         }
 
         val requestBody = requestPayload.toString().toRequestBody("application/json".toMediaType())
@@ -947,37 +950,4 @@ private fun performDeleteDocument(
             Toast.makeText(context, "🗑️ 已成功删除文档: ${doc.fileName}", Toast.LENGTH_SHORT).show()
         }
     }
-}
-
-// 🚀 自适应表格-文本翻译助手：在内存中将复杂的 Markdown 表格翻译成最适合小模型读取的高清文本列表
-private fun convertTableToBulletPoints(rawContent: String): String {
-    val lines = rawContent.lines()
-    val result = java.lang.StringBuilder()
-    for (line in lines) {
-        val trimmed = line.trim()
-        if (trimmed.startsWith("|") && trimmed.endsWith("|")) {
-            val cells = trimmed.split("|")
-                .map { it.trim() }
-                .filterIndexed { index, _ -> index > 0 && index < trimmed.split("|").size - 1 }
-            
-            // 过滤掉表格线及列头以防干扰
-            if (cells.isEmpty() || cells.any { it.contains("---") } || cells[0] == "使用单位" || cells[0] == "单位") {
-                continue
-            }
-            
-            if (cells.size >= 2) {
-                val name = cells[0]
-                val num = cells[1]
-                val short = cells.getOrNull(2) ?: ""
-                if (short.isNotEmpty()) {
-                    result.append("- ${name}：长号 ${num} (短号: ${short})\n")
-                } else {
-                    result.append("- ${name}：长号 ${num}\n")
-                }
-            }
-        } else {
-            result.append(line).append("\n")
-        }
-    }
-    return result.toString()
 }

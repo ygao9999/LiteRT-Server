@@ -508,7 +508,12 @@ fun sendPrompt(
             override fun onFailure(eventSource: EventSource, t: Throwable?, response: Response?) {
                 eventSource.cancel()
                 onComplete()
-                updateMessage(messagesList, aiMsgId, "连接异常，请检查您的网络连接并确认服务端是否正常开启。", false, null)
+                
+                // 🚨 关键保护：只有当消息仍处于流式传输状态时，才触发连接异常报错
+                val isStillStreaming = messagesList.firstOrNull { it.id == aiMsgId }?.isStreaming ?: false
+                if (isStillStreaming) {
+                    updateMessage(messagesList, aiMsgId, "连接异常，请检查您的网络连接并确认服务端是否正常开启。", false, null)
+                }
             }
         }
 

@@ -723,7 +723,11 @@ fun sendPrompt(
                     val choices = json.optJSONArray("choices")
                     if (choices != null && choices.length() > 0) {
                         val delta = choices.getJSONObject(0).optJSONObject("delta")
-                        val token = delta?.optString("content", "") ?: ""
+                        val token = if (delta == null || delta.isNull("content")) {
+                            ""
+                        } else {
+                            delta.optString("content", "")
+                        }
                         if (token.isNotEmpty()) {
                             aggregatedResponse += token
                             updateMessage(messagesList, aiMsgId, aggregatedResponse, true, null)

@@ -10,6 +10,7 @@
         android:label="LiteRT AI 助手"
         android:roundIcon="@android:drawable/ic_dialog_info"
         android:supportsRtl="true"
+        android:usesCleartextTraffic="true"
         android:theme="@android:style/Theme.Material.Light.NoActionBar">
         
         <activity

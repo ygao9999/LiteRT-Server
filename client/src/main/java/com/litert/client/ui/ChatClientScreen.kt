@@ -641,13 +641,15 @@ fun sendPrompt(
                 android.util.Log.i("RAGEngine", "自动启动：A模式 - 极速小文件直接投喂 (${totalChars}字)")
             } else {
                 // 🔍 B模式：大文件切段智能 RAG 检索模式 (SQLite LIKE Keyword matching)
-                // 提取提问中最核心的主体关键词作为 SQL 检索字词
+                // 极简提取提问中的 3 个核心关键词
                 val cleanedPrompt = prompt.replace(Regex("[？！，。：；,.?!]"), " ")
                 val words = cleanedPrompt.split(" ").filter { it.length >= 2 }
-                val targetKeyword = "%${words.firstOrNull() ?: "电话"}%"
+                val k1 = "%${words.getOrNull(0) ?: "收费"}%"
+                val k2 = "%${words.getOrNull(1) ?: "电话"}%"
+                val k3 = "%${words.getOrNull(2) ?: "门诊"}%"
                 
                 // 检索数据库，提取匹配度最高的 3 片段（Top 3 chunks）
-                var matchedChunks = database.documentDao().searchChunks(selectedDocIds, targetKeyword)
+                var matchedChunks = database.documentDao().searchChunks(selectedDocIds, k1, k2, k3)
                 if (matchedChunks.isEmpty()) {
                     matchedChunks = database.documentDao().fallbackChunks(selectedDocIds)
                 }

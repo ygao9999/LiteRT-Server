@@ -702,10 +702,12 @@ fun sendPrompt(
             if (totalChars < 8000) {
                 // 🟢 A模式：小文件直投模式（Direct Injection）
                 contextString = buildString {
-                    append("以下是用户提供的完整背景参考资料（表格的数据列格式为【使用单位 | 长号 | 短号】）：\n\n")
+                    append("以下是用户提供的完整背景参考资料：\n\n")
                     for (doc in selectedDocs) {
                         append("### 文档名: ${doc.fileName}\n")
-                        append("${doc.fileContent}\n\n")
+                        // 🚀 核心转换：将复杂的表格在内存中动态转换为极简列表，防止小模型注意力机制退化产生乱码
+                        append(convertTableToBulletPoints(doc.fileContent))
+                        append("\n\n")
                     }
                 }
                 android.util.Log.i("RAGEngine", "自动启动：A模式 - 极速小文件直接投喂 (${totalChars}字)")
@@ -725,9 +727,11 @@ fun sendPrompt(
                 }
                 
                 contextString = buildString {
-                    append("根据用户提问，已在您挂载的本地知识库文档中智能为您筛选出以下最相关的片段资料（注：表格数据列格式为【使用单位 | 长号 | 短号】）：\n\n")
+                    append("根据用户提问，已在您挂载本地知识库文档中智能为您筛选出以下最相关的片段资料：\n\n")
                     for (chunk in matchedChunks) {
-                        append("- ${chunk.content}\n")
+                        // 🚀 核心转换：将切片中的表格在内存中转换为对模型最友好的列表文本
+                        append(convertTableToBulletPoints(chunk.content))
+                        append("\n")
                     }
                 }
                 android.util.Log.i("RAGEngine", "自动启动：B模式 - 大文件切片段落检索投喂，匹配到 ${matchedChunks.size} 个 Chunks")
@@ -943,4 +947,37 @@ private fun performDeleteDocument(
             Toast.makeText(context, "🗑️ 已成功删除文档: ${doc.fileName}", Toast.LENGTH_SHORT).show()
         }
     }
+}
+
+// 🚀 自适应表格-文本翻译助手：在内存中将复杂的 Markdown 表格翻译成最适合小模型读取的高清文本列表
+private fun convertTableToBulletPoints(rawContent: String): String {
+    val lines = rawContent.lines()
+    val result = java.lang.StringBuilder()
+    for (line in lines) {
+        val trimmed = line.trim()
+        if (trimmed.startsWith("|") && trimmed.endsWith("|")) {
+            val cells = trimmed.split("|")
+                .map { it.trim() }
+                .filterIndexed { index, _ -> index > 0 && index < trimmed.split("|").size - 1 }
+            
+            // 过滤掉表格线及列头以防干扰
+            if (cells.isEmpty() || cells.any { it.contains("---") } || cells[0] == "使用单位" || cells[0] == "单位") {
+                continue
+            }
+            
+            if (cells.size >= 2) {
+                val name = cells[0]
+                val num = cells[1]
+                val short = cells.getOrNull(2) ?: ""
+                if (short.isNotEmpty()) {
+                    result.append("- ${name}：长号 ${num} (短号: ${short})\n")
+                } else {
+                    result.append("- ${name}：长号 ${num}\n")
+                }
+            }
+        } else {
+            result.append(line).append("\n")
+        }
+    }
+    return result.toString()
 }

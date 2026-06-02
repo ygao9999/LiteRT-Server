@@ -520,12 +520,17 @@ fun MessageBubbleRow(
                         else MaterialTheme.colorScheme.surface
                     )
                     .padding(horizontal = 14.dp, vertical = 10.dp)
-            ) {
-                Text(
-                    text = message.content,
-                    fontSize = 15.sp,
-                    color = MaterialTheme.colorScheme.onBackground
-                )
+                if (isUser) {
+                    Text(
+                        text = message.content,
+                        fontSize = 15.sp,
+                        color = MaterialTheme.colorScheme.onBackground
+                    )
+                } else {
+                    MarkdownMessageText(
+                        content = message.content
+                    )
+                }
             }
 
             // RAG 引用文献绿色胶囊卡片（ima style 高保真还原）

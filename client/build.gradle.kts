@@ -64,6 +64,9 @@ dependencies {
     // Coil for image display
     implementation("io.coil-kt:coil-compose:2.7.0")
 
+    // Markdown rendering support (JitPack)
+    implementation("com.github.jeziellago:compose-markdown:0.7.2")
+
     debugImplementation("androidx.compose.ui:ui-tooling")
     debugImplementation("androidx.compose.ui:ui-test-manifest")
 }

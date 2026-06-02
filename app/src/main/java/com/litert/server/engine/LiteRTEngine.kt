@@ -146,7 +146,7 @@ class LiteRTEngine(private val context: Context) {
      * 支持传入新的 system prompt，如果传入了，更新它。
      * 等待当前生成完成后再重建 conversation，不会截断进行中的输出。
      */
-    suspend fun clearHistory(newSystemPrompt: String? = null, newTemperature: Float? = null) {
+    suspend fun clearHistory(newSystemPrompt: String? = null, newTemperature: Double? = null) {
         conversationMutex.withLock {
             val eng = engine ?: return@withLock
             

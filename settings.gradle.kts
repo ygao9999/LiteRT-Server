@@ -15,4 +15,4 @@ dependencyResolutionManagement {
 }
 
 rootProject.name = "LiteRTServer"
-include(":app")
+include(":app", ":client")

@@ -8,3 +8,8 @@
 .externalNativeBuild
 .cxx
 local.properties
+
+# Sensitive contact lists (Privacy Protection)
+*汕头大学*
+*.pdf
+*.xlsx

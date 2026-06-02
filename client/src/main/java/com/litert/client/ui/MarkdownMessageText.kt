@@ -20,11 +20,17 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Text
 import androidx.compose.ui.draw.clip
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.Box
+import androidx.compose.ui.Alignment
+import com.litert.client.ui.theme.AccentGreen
 
 /**
  * 纯 Compose 原生轻量级 Markdown 渲染器（零第三方依赖）
  *
- * 支持：标题(#)、加粗(**)、斜体(*)、行内代码(`)、代码块(```)、无序列表(- / *)
+ * 支持：标题(#)、加粗(**)、斜体(*)、行内代码(`)、代码块(```)、无序列表(- / *)、表格(|)
  */
 @Composable
 fun MarkdownMessageText(
@@ -36,8 +42,22 @@ fun MarkdownMessageText(
     val codeBlockLines = mutableListOf<String>()
 
     Column(modifier = modifier) {
-        for (line in lines) {
-            // 代码块开关检测
+        var i = 0
+        while (i < lines.size) {
+            val line = lines[i]
+
+            // 1. 表格检测与聚合渲染
+            if (line.trim().startsWith("|") && line.trim().endsWith("|")) {
+                val tableLines = mutableListOf<String>()
+                while (i < lines.size && lines[i].trim().startsWith("|") && lines[i].trim().endsWith("|")) {
+                    tableLines.add(lines[i])
+                    i++
+                }
+                RenderTable(tableLines)
+                continue
+            }
+
+            // 2. 代码块开关检测
             if (line.trimStart().startsWith("```")) {
                 if (inCodeBlock) {
                     // 结束代码块：渲染积累的代码行
@@ -47,15 +67,17 @@ fun MarkdownMessageText(
                 } else {
                     inCodeBlock = true
                 }
+                i++
                 continue
             }
 
             if (inCodeBlock) {
                 codeBlockLines.add(line)
+                i++
                 continue
             }
 
-            // 普通行：按 Markdown 语法解析
+            // 3. 普通行：按 Markdown 语法解析
             when {
                 line.startsWith("### ") -> {
                     Text(
@@ -108,7 +130,130 @@ fun MarkdownMessageText(
                     )
                 }
             }
+            i++
         }
+
+        // 如果文本在流式传输中截断（代码块未闭合），仍然渲染已有内容
+        if (inCodeBlock && codeBlockLines.isNotEmpty()) {
+            CodeBlockText(codeBlockLines.joinToString("\n"))
+        }
+    }
+}
+
+/**
+ * 结构化表格原生 Compose 渲染组件（专为手机窄屏进行了卡片化及列对齐优化）
+ */
+@Composable
+fun RenderTable(tableLines: List<String>) {
+    // 解析表格的所有单元格，剥离首尾的 pipe 并进行 trim 过滤
+    val rows = tableLines.map { line ->
+        line.split("|")
+            .map { it.trim() }
+            .filterIndexed { index, _ -> index > 0 && index < line.split("|").size - 1 }
+    }.filter { row ->
+        // 过滤掉表格中的 :--- 或 --- 分隔行
+        row.none { it.contains("---") }
+    }
+
+    if (rows.isEmpty()) return
+
+    val headers = rows.firstOrNull() ?: return
+    val dataRows = rows.drop(1)
+
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 8.dp)
+            .clip(RoundedCornerShape(12.dp))
+            .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f))
+            .padding(12.dp)
+    ) {
+        // 1. 特别优化：如果是标准的 3 列电话表格 (使用单位 | 长号/号码 | 短号)
+        if (headers.size == 3 && (headers[1].contains("号") || headers[2].contains("号"))) {
+            dataRows.forEachIndexed { index, row ->
+                if (row.size >= 3) {
+                    val unit = row[0]
+                    val tel = row[1]
+                    val shortTel = row[2]
+
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(vertical = 6.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = unit,
+                            fontSize = 14.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.onSurface,
+                            modifier = Modifier.weight(1f)
+                        )
+                        Column(horizontalAlignment = Alignment.End) {
+                            Text(
+                                text = tel,
+                                fontSize = 14.sp,
+                                fontWeight = FontWeight.SemiBold,
+                                color = AccentGreen
+                            )
+                            if (shortTel.isNotEmpty()) {
+                                Text(
+                                    text = "短号: $shortTel",
+                                    fontSize = 11.sp,
+                                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f)
+                                )
+                            }
+                        }
+                    }
+
+                    if (index < dataRows.size - 1) {
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(0.5.dp)
+                                .background(MaterialTheme.colorScheme.onSurface.copy(alpha = 0.08f))
+                        )
+                    }
+                }
+            }
+        } else {
+            // 2. 通用自适应表格排版：在窄屏上按列权重均匀网格对齐
+            rows.forEachIndexed { rowIndex, row ->
+                val isHeader = rowIndex == 0
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .background(if (isHeader) MaterialTheme.colorScheme.primary.copy(alpha = 0.05f) else Color.Transparent)
+                        .padding(vertical = 8.dp, horizontal = 4.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    row.forEach { cell ->
+                        Text(
+                            text = cell,
+                            fontSize = if (isHeader) 13.sp else 14.sp,
+                            fontWeight = if (isHeader) FontWeight.Bold else FontWeight.Normal,
+                            color = if (isHeader) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
+                            modifier = Modifier
+                                .weight(1f)
+                                .padding(horizontal = 4.dp)
+                        )
+                    }
+                }
+
+                if (rowIndex < rows.size - 1) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(0.5.dp)
+                            .background(MaterialTheme.colorScheme.onSurface.copy(alpha = 0.08f))
+                    )
+                }
+            }
+        }
+    }
+}
 
         // 如果文本在流式传输中截断（代码块未闭合），仍然渲染已有内容
         if (inCodeBlock && codeBlockLines.isNotEmpty()) {

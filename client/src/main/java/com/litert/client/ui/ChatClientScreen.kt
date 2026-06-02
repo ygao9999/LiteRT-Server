@@ -577,6 +577,7 @@ fun MessageBubbleRow(
                         else MaterialTheme.colorScheme.surface
                     )
                     .padding(horizontal = 14.dp, vertical = 10.dp)
+            ) {
                 if (isUser) {
                     Text(
                         text = message.content,

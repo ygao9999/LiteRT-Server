@@ -1,10 +1,22 @@
-name: Build APK
+name: Build Server APK
 
 on:
   push:
     branches: [ main ]
+    paths:
+      - 'app/**'
+      - 'gradle/**'
+      - 'build.gradle.kts'
+      - 'settings.gradle.kts'
+      - '.github/workflows/build_server.yml'
   pull_request:
     branches: [ main ]
+    paths:
+      - 'app/**'
+      - 'gradle/**'
+      - 'build.gradle.kts'
+      - 'settings.gradle.kts'
+      - '.github/workflows/build_server.yml'
   workflow_dispatch:
 
 jobs:
@@ -34,8 +46,8 @@ jobs:
       - name: Make gradlew executable
         run: chmod +x gradlew
 
-      - name: Build debug APK
-        run: ./gradlew assembleDebug
+      - name: Build Server debug APK
+        run: ./gradlew :app:assembleDebug
 
       - name: Upload Server APK
         uses: actions/upload-artifact@v4
@@ -44,16 +56,9 @@ jobs:
           path: app/build/outputs/apk/debug/app-debug.apk
           retention-days: 7
 
-      - name: Upload Client APK
-        uses: actions/upload-artifact@v4
-        with:
-          name: LiteRT-Client-debug
-          path: client/build/outputs/apk/debug/client-debug.apk
-          retention-days: 7
-
       - name: Upload build reports on failure
         if: failure()
         uses: actions/upload-artifact@v4
         with:
-          name: build-reports
+          name: server-build-reports
           path: app/build/reports/

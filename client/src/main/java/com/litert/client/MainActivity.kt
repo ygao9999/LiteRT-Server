@@ -23,6 +23,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.lifecycleScope
+import com.litert.client.data.AppDatabase
 import com.litert.client.ui.ChatClientScreen
 import com.litert.client.ui.theme.LiteRTClientTheme
 import kotlinx.coroutines.Dispatchers
@@ -42,6 +43,8 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        val database = AppDatabase.getDatabase(this)
+        
         setContent {
             LiteRTClientTheme {
                 Surface(
@@ -85,6 +88,7 @@ class MainActivity : ComponentActivity() {
                     ) {
                         ChatClientScreen(
                             serverUrl = "http://$serverUrl",
+                            database = database,
                             onDisconnect = { isConnected = false }
                         )
                     }

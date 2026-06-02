@@ -39,6 +39,9 @@ import org.json.JSONObject
 import java.io.IOException
 import java.util.concurrent.TimeUnit
 
+import com.litert.client.data.AppDatabase
+import com.litert.client.data.MessageEntity
+
 // 客户端消息数据模型
 data class ClientMessage(
     val id: String = java.util.UUID.randomUUID().toString(),
@@ -52,6 +55,7 @@ data class ClientMessage(
 @Composable
 fun ChatClientScreen(
     serverUrl: String,
+    database: AppDatabase,
     onDisconnect: () -> Unit
 ) {
     val messages = remember { mutableStateListOf<ClientMessage>() }
@@ -68,6 +72,25 @@ fun ChatClientScreen(
 
     val coroutineScope = rememberCoroutineScope()
     val listState = rememberLazyListState()
+
+    // 🚀 初始化时，自动从 Room 本地数据库恢复历史聊天记录
+    LaunchedEffect(Unit) {
+        coroutineScope.launch(Dispatchers.IO) {
+            val localMessages = database.messageDao().getAllMessages().map { entity ->
+                ClientMessage(
+                    id = entity.id,
+                    role = entity.role,
+                    content = entity.content,
+                    isStreaming = false,
+                    citationSource = entity.citationSource
+                )
+            }
+            kotlinx.coroutines.withContext(Dispatchers.Main) {
+                messages.clear()
+                messages.addAll(localMessages)
+            }
+        }
+    }
 
     // 监听消息列表大小变化，自动滚屏
     LaunchedEffect(messages.size) {
@@ -99,7 +122,15 @@ fun ChatClientScreen(
                     }
                 },
                 actions = {
-                    IconButton(onClick = { messages.clear() }) {
+                    IconButton(onClick = {
+                        // 🚀 物理清除本地数据库历史记录，并同步清除UI队列
+                        coroutineScope.launch(Dispatchers.IO) {
+                            database.messageDao().clearHistory()
+                            kotlinx.coroutines.withContext(Dispatchers.Main) {
+                                messages.clear()
+                            }
+                        }
+                    }) {
                         Icon(imageVector = Icons.Default.DeleteSweep, contentDescription = "清空聊天记录")
                     }
                 },
@@ -238,6 +269,7 @@ fun ChatClientScreen(
                                     mode = chatMode,
                                     model = modelName,
                                     messagesList = messages,
+                                    database = database,
                                     coroutineScope = coroutineScope,
                                     onStart = { isSending = true },
                                     onComplete = { isSending = false }
@@ -427,12 +459,27 @@ fun sendPrompt(
     mode: String,
     model: String,
     messagesList: MutableList<ClientMessage>,
+    database: AppDatabase,
     coroutineScope: CoroutineScope,
     onStart: () -> Unit,
     onComplete: () -> Unit
 ) {
     onStart()
-    messagesList.add(ClientMessage(role = "user", content = prompt))
+    
+    // 🚀 生成并保存用户消息到 Room 数据库
+    val userMsg = ClientMessage(role = "user", content = prompt)
+    messagesList.add(userMsg)
+    coroutineScope.launch(Dispatchers.IO) {
+        database.messageDao().insertMessage(
+            MessageEntity(
+                id = userMsg.id,
+                role = userMsg.role,
+                content = userMsg.content,
+                timestamp = System.currentTimeMillis(),
+                citationSource = null
+            )
+        )
+    }
 
     // 预添加一个空白的 AI 气泡，用于后续实时填充 Token
     val aiMsgId = java.util.UUID.randomUUID().toString()
@@ -488,6 +535,19 @@ fun sendPrompt(
                     val isKnowledgeQuery = mode == "知识库" && (prompt.contains("收费") || prompt.contains("门诊"))
                     val citation = if (isKnowledgeQuery) "汕头大学精神卫生中心业务电话号码表20230925（公开版）.xlsx" else null
                     updateMessage(messagesList, aiMsgId, aggregatedResponse, false, citation)
+                    
+                    // 🚀 消息流接收完毕，立刻异步向 Room 数据库写入 AI 的完整回答
+                    coroutineScope.launch(Dispatchers.IO) {
+                        database.messageDao().insertMessage(
+                            MessageEntity(
+                                id = aiMsgId,
+                                role = "assistant",
+                                content = aggregatedResponse,
+                                timestamp = System.currentTimeMillis(),
+                                citationSource = citation
+                            )
+                        )
+                    }
                     return
                 }
 

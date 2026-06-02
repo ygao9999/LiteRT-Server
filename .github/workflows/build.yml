@@ -37,11 +37,18 @@ jobs:
       - name: Build debug APK
         run: ./gradlew assembleDebug
 
-      - name: Upload APK artifact
+      - name: Upload Server APK
         uses: actions/upload-artifact@v4
         with:
           name: LiteRT-Server-debug
           path: app/build/outputs/apk/debug/app-debug.apk
+          retention-days: 7
+
+      - name: Upload Client APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: LiteRT-Client-debug
+          path: client/build/outputs/apk/debug/client-debug.apk
           retention-days: 7
 
       - name: Upload build reports on failure

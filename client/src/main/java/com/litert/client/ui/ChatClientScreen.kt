@@ -41,6 +41,11 @@ import com.litert.client.data.AppDatabase
 import com.litert.client.data.MessageEntity
 import com.litert.client.data.DocumentEntity
 import com.litert.client.data.DocumentChunkEntity
+import com.litert.client.data.DocumentImporter
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.ui.platform.LocalContext
+import android.widget.Toast
 
 // 客户端消息数据模型
 data class ClientMessage(
@@ -77,6 +82,31 @@ fun ChatClientScreen(
 
     val coroutineScope = rememberCoroutineScope()
     val listState = rememberLazyListState()
+    val context = LocalContext.current
+    
+    // File Picker Launcher for Option C: Custom TXT/MD Document Import
+    val filePickerLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.GetContent()
+    ) { uri ->
+        if (uri != null) {
+            coroutineScope.launch(Dispatchers.IO) {
+                val importedDoc = DocumentImporter.importDocument(context, uri, database)
+                if (importedDoc != null) {
+                    val docs = database.documentDao().getAllDocuments()
+                    withContext(Dispatchers.Main) {
+                        availableDocs.clear()
+                        availableDocs.addAll(docs)
+                        selectedDocIds.add(importedDoc.id)
+                        Toast.makeText(context, "🎉 成功导入并切片文档: ${importedDoc.fileName}", Toast.LENGTH_LONG).show()
+                    }
+                } else {
+                    withContext(Dispatchers.Main) {
+                        Toast.makeText(context, "❌ 导入失败，文档为空或读取出错", Toast.LENGTH_SHORT).show()
+                    }
+                }
+            }
+        }
+    }
 
     // 🚀 初始化时自动加载历史消息，并智能预装默认文档
     LaunchedEffect(Unit) {
@@ -408,12 +438,39 @@ fun ChatClientScreen(
                         .padding(24.dp)
                         .navigationBarsPadding()
                 ) {
-                    Text(
-                        text = "📚 挂载本地知识库文档",
-                        fontSize = 18.sp,
-                        fontWeight = FontWeight.Bold,
-                        modifier = Modifier.padding(bottom = 16.dp)
-                    )
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(bottom = 16.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = "📚 挂载本地知识库文档",
+                            fontSize = 18.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+                        TextButton(
+                            onClick = {
+                                filePickerLauncher.launch("*/*")
+                            },
+                            colors = ButtonDefaults.textButtonColors(
+                                contentColor = AccentGreen
+                            )
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Add,
+                                contentDescription = "导入",
+                                modifier = Modifier.size(16.dp)
+                            )
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text(
+                                text = "导入 TXT/MD",
+                                fontSize = 14.sp,
+                                fontWeight = FontWeight.Bold
+                            )
+                        }
+                    }
                     
                     if (availableDocs.isEmpty()) {
                         Text(

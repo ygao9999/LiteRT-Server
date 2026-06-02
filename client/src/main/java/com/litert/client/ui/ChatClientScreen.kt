@@ -708,7 +708,7 @@ fun sendPrompt(
             if (totalChars < 8000) {
                 // 🟢 A模式：小文件直投模式（Direct Injection）
                 contextString = buildString {
-                    append("以下是用户提供的完整背景参考资料：\n\n")
+                    append("以下是用户提供的完整背景参考资料（表格的数据列格式为【使用单位 | 长号 | 短号】）：\n\n")
                     for (doc in selectedDocs) {
                         append("### 文档名: ${doc.fileName}\n")
                         append("${doc.fileContent}\n\n")
@@ -731,7 +731,7 @@ fun sendPrompt(
                 }
                 
                 contextString = buildString {
-                    append("根据用户提问，已在您挂载的本地知识库文档中智能为您筛选出以下最相关的片段资料：\n\n")
+                    append("根据用户提问，已在您挂载的本地知识库文档中智能为您筛选出以下最相关的片段资料（注：表格数据列格式为【使用单位 | 长号 | 短号】）：\n\n")
                     for (chunk in matchedChunks) {
                         append("- ${chunk.content}\n")
                     }
@@ -745,7 +745,7 @@ fun sendPrompt(
         val userMsgJson = JSONObject().apply {
             put("role", "user")
             put("content", if (contextString.isNotEmpty()) {
-                "$contextString\n\n----\n\n基于以上参考资料，请精准回答用户问题：$prompt"
+                "你是一个极其专业的医院电话号码与科室业务查询助手。请严格基于以下提供的参考资料，用非常简洁、排版工整且适合手机屏幕阅读的加粗列表格式（如：* **科室名**：长号 / 短号）精准回答用户问题。\n\n【重要要求】\n1. 严禁输出任何形式的 Markdown 格式表格（不要使用任何包含 | 符号的表格），请将其全部转化为上述精美的加粗列表格式输出。\n2. 若号码中包含相似数字，请务必极其仔细校对并准确写出，绝对不能多写、少写或写错任何一位数字。\n\n【参考资料】\n$contextString\n\n----\n\n请精准回答用户问题：$prompt"
             } else prompt)
         }
         messagesArray.put(userMsgJson)

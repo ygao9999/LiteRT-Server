@@ -30,7 +30,7 @@ abstract class AppDatabase : RoomDatabase() {
                     AppDatabase::class.java,
                     "litert_chat_database"
                 )
-                .fallbackToDestructiveMigration() // 自动平滑升级模式，升级时重建表结构，杜绝闪退
+                .fallbackToDestructiveMigration(dropAllTables = true) // 自动平滑升级模式，升级时重建表结构，杜绝闪退
                 .build()
                 INSTANCE = instance
                 instance
